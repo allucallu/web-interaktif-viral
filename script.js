@@ -1,6 +1,6 @@
 const videoElement = document.querySelector('.input_video');
 const canvas = document.getElementById('particleCanvas');
-const ctx = canvas.getContext('2d', { alpha: false }); // Optimasi: Matikan alpha channel canvas
+const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true }); // Optimasi: Matikan alpha, aktifkan desynchronized untuk low-latency
 
 let particles = [];
 let isPinching = false;
@@ -14,26 +14,29 @@ function initCanvas() {
 
 class Particle {
     constructor(tx, ty, color) {
+        // Posisi awal acak
         this.x = Math.random() * canvas.width;
         this.y = Math.random() * canvas.height;
         this.targetX = tx;
         this.targetY = ty;
-        this.vx = (Math.random() - 0.5) * 3;
-        this.vy = (Math.random() - 0.5) * 3;
-        this.size = 1.5; // Ukuran tetap agar ringan
+        // Kecepatan acak untuk mode scatter
+        this.vx = (Math.random() - 0.5) * 4;
+        this.vy = (Math.random() - 0.5) * 4;
+        this.size = 2; // Ukuran sedikit lebih besar agar terlihat jelas di HP
         this.color = color;
     }
 
     update() {
-        // Gunakan angka yang lebih pasti untuk HP
-        let ease = isPinching ? 0.2 : 0.04;
-        
         if (isPinching) {
-            this.x += (this.targetX - this.x) * ease;
-            this.y += (this.targetY - this.y) * ease;
+            // MODE FORM: Paksa posisi instan (Snappy Abis)
+            // Kita gunakan 0.5 agar ada sedikit transisi tapi sangat cepat
+            this.x += (this.targetX - this.x) * 0.5;
+            this.y += (this.targetY - this.y) * 0.5;
         } else {
+            // MODE SCATTER: Bergerak acak
             this.x += this.vx;
             this.y += this.vy;
+            // Bounce saat melayang acak
             if (this.x < 0 || this.x > canvas.width) this.vx *= -1;
             if (this.y < 0 || this.y > canvas.height) this.vy *= -1;
         }
@@ -41,7 +44,7 @@ class Particle {
 
     draw() {
         ctx.fillStyle = this.color;
-        ctx.fillRect(this.x, this.y, this.size, this.size); // fillRect jauh lebih cepat daripada arc() di HP
+        ctx.fillRect(this.x, this.y, this.size, this.size); // fillRect tercepat di HP
     }
 }
 
@@ -50,10 +53,13 @@ function createShape(text) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
     ctx.fillStyle = "white";
-    let fontSize = text === "❤️" ? 200 : 80; // Ukuran lebih kecil untuk layar HP
+    // Sesuaikan ukuran teks agar pas di layar HP (lebar < tinggi)
+    let isPortrait = canvas.width < canvas.height;
+    let fontSize = text === "❤️" ? (isPortrait ? 250 : 400) : (isPortrait ? 80 : 130);
     ctx.font = `bold ${fontSize}px sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
+    
     ctx.fillText(text === "❤️" ? "❤" : text, canvas.width / 2, canvas.height / 2);
 
     const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
@@ -61,9 +67,9 @@ function createShape(text) {
 
     const color = text === "❤️" ? "#ff2d75" : "#00f7ff";
 
-    // Step 7: Lebih renggang agar jumlah partikel sedikit (HP tidak kuat ribuan partikel)
-    for (let y = 0; y < canvas.height; y += 7) {
-        for (let x = 0; x < canvas.width; x += 7) {
+    // Step 8: Kurangi jumlah partikel lebih drastis agar HP tidak berat
+    for (let y = 0; y < canvas.height; y += 8) {
+        for (let x = 0; x < canvas.width; x += 8) {
             const index = (y * canvas.width + x) * 4;
             if (data[index + 3] > 128) {
                 tempParticles.push(new Particle(x, y, color));
@@ -77,7 +83,7 @@ const hands = new Hands({
     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
 });
 
-// Gunakan modelComplexity 0 untuk HP (Paling Cepat)
+// Paling Ringan: modelComplexity 0, resolusi deteksi rendah
 hands.setOptions({
     maxNumHands: 1,
     modelComplexity: 0,
@@ -93,6 +99,7 @@ hands.onResults((results) => {
             Math.pow(lm[4].y - lm[8].y, 2)
         );
 
+        // Threshold pinch sedikit lebih longgar untuk HP
         const nowPinching = distance < 0.06;
         if (nowPinching && !isPinching) {
             currentShapeIndex = (currentShapeIndex + 1) % SHAPES.length;
@@ -104,23 +111,22 @@ hands.onResults((results) => {
     }
 });
 
-// Kamera khusus Mobile
+// Resolusi Kamera Terendah agar kompatibel dan cepat
 const camera = new Camera(videoElement, {
     onFrame: async () => {
-        await hands.send({ image: videoElement });
+        try {
+            await hands.send({ image: videoElement });
+        } catch(e) {} // Abaikan error frame MediaPipe
     },
-    width: 640, // Resolusi lebih rendah agar lancar di HP
-    height: 480
+    width: 480,
+    height: 360
 });
 
 function animate() {
-    // Matikan efek transparan berlebih, gunakan solid hitam tipis
+    // Matikan trail transparan, gunakan solid hitam untuk performa maksimal
     ctx.fillStyle = "black";
-    ctx.globalAlpha = 0.2;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.globalAlpha = 1.0;
     
-    // Matikan shadowBlur dan globalCompositeOperation karena sangat berat di mobile
     for (let i = 0; i < particles.length; i++) {
         particles[i].update();
         particles[i].draw();
@@ -129,9 +135,13 @@ function animate() {
     requestAnimationFrame(animate);
 }
 
+// Mulai Aplikasi
 initCanvas();
 createShape(SHAPES[0]);
 camera.start();
 animate();
 
-window.addEventListener('resize', () => { initCanvas(); createShape(SHAPES[currentShapeIndex]); });
+window.addEventListener('resize', () => { 
+    initCanvas(); 
+    createShape(SHAPES[currentShapeIndex]); 
+});
